@@ -172,7 +172,7 @@ function renderList() {
         (e.traceId ?? "").toLowerCase().includes(filterText)) &&
       (activeType === "ALL" || e.transport === activeType)
     )
-    .sort((a, b) => b.ts - a.ts);
+    .sort((a, b) => a.ts - a.ts);
 
   el("count").textContent = currentRows.length + " entries";
   list.innerHTML = "";
