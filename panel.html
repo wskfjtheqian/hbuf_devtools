@@ -1,44 +1,44 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <link rel="stylesheet" href="panel.css" />
 </head>
 <body>
   <header class="toolbar">
-    <button id="clear" class="icon-btn" title="清空日志 (Ctrl+L)">🚫</button>
+    <button id="clear" class="icon-btn" title="Clear logs (Ctrl+L)">🚫</button>
     <span class="sep"></span>
-    <input id="filter" type="text" placeholder="过滤 path / traceId ..." />
+    <input id="filter" type="text" placeholder="Filter path / traceId ..." />
     <span class="sep"></span>
     <div class="filter-pills">
-      <button class="pill active" data-type="ALL">全部</button>
+      <button class="pill active" data-type="ALL">All</button>
       <button class="pill" data-type="http">HTTP</button>
       <button class="pill" data-type="websocket">WebSocket</button>
     </div>
-    <span id="count" class="count">0 条</span>
+    <span id="count" class="count">0 entries</span>
   </header>
 
   <main id="workspace">
     <section id="list-pane">
       <div class="grid-row head">
-        <span class="col-status">状态</span>
-        <span class="col-method">方法</span>
-        <span class="col-name">名称</span>
-        <span class="col-type">类型</span>
-        <span class="col-time">耗时</span>
-        <span class="col-start">开始时间</span>
+        <span class="col-status">Status</span>
+        <span class="col-method">Method</span>
+        <span class="col-name">Name</span>
+        <span class="col-type">Type</span>
+        <span class="col-time">Duration</span>
+        <span class="col-start">Start Time</span>
       </div>
       <div id="list"></div>
     </section>
 
-    <div id="resizer" class="hidden" title="拖动调整宽度"></div>
+    <div id="resizer" class="hidden" title="Drag to resize"></div>
 
     <aside id="detail" class="hidden">
       <div class="detail-tabs">
-        <button id="detail-close" class="tab-close" title="关闭 (Esc)">×</button>
-        <button class="tab-btn active" data-tab="headers">标头</button>
-        <button class="tab-btn" data-tab="payload">载荷</button>
-        <button class="tab-btn" data-tab="response">响应</button>
+        <button id="detail-close" class="tab-close" title="Close (Esc)">×</button>
+        <button class="tab-btn active" data-tab="headers">Headers</button>
+        <button class="tab-btn" data-tab="payload">Payload</button>
+        <button class="tab-btn" data-tab="response">Response</button>
         <span id="detail-path" class="tab-path"></span>
       </div>
 
@@ -48,13 +48,13 @@
         </div>
         <div id="tab-payload" class="tab-pane">
           <div class="pane-actions">
-            <button id="copy-req" class="copy-btn">复制载荷</button>
+            <button id="copy-req" class="copy-btn">Copy Payload</button>
           </div>
           <div id="req-body" class="json-view"></div>
         </div>
         <div id="tab-response" class="tab-pane">
           <div class="pane-actions">
-            <button id="copy-resp" class="copy-btn">复制响应</button>
+            <button id="copy-resp" class="copy-btn">Copy Response</button>
           </div>
           <div id="resp-body" class="json-view"></div>
         </div>
@@ -63,10 +63,10 @@
   </main>
 
   <div id="ctx-menu" class="ctx-menu hidden">
-    <div class="ctx-item" data-action="copy-req">复制请求载荷 (JSON)</div>
-    <div class="ctx-item" data-action="copy-resp">复制响应结果 (JSON)</div>
+    <div class="ctx-item" data-action="copy-req">Copy Request Payload (JSON)</div>
+    <div class="ctx-item" data-action="copy-resp">Copy Response Result (JSON)</div>
     <div class="ctx-sep"></div>
-    <div class="ctx-item" data-action="copy-path">复制请求 Path</div>
+    <div class="ctx-item" data-action="copy-path">Copy Request Path</div>
   </div>
 
   <script src="panel.js"></script>

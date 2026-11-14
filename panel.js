@@ -3,15 +3,15 @@ const entries = [];
 let filterText = "";
 let activeType = "ALL"; // "ALL" | "http" | "websocket"
 let activeTab = "headers"; // "headers" | "payload" | "response"
-const collapsedPaths = new Set(); // 记录用户主动收起的节点（默认根节点展开，子节点收起）
-const expandedPaths = new Set();  // 记录用户主动展开的子节点
+const collapsedPaths = new Set(); // Tracks nodes the user collapsed (roots expand by default, children collapse)
+const expandedPaths = new Set();  // Tracks child nodes the user expanded
 let selected = null;
-let currentRows = []; // 当前过滤排序后的列表缓存，供键盘上下键导航
-let ctxEntry = null;  // 当前右键菜单选中的条目
+let currentRows = []; // Cache of the filtered/sorted list for keyboard up/down navigation
+let ctxEntry = null;  // Entry currently selected in the context menu
 
 const el = (id) => document.getElementById(id);
 
-// ===== 与 background 建立长连接并注册当前 tabId =====
+// ===== Establish a long-lived connection with the background and register the current tabId =====
 const port = chrome.runtime.connect({ name: "HBUF_PANEL" });
 port.postMessage({ type: "REGISTER", tabId });
 port.onMessage.addListener((msg) => {
@@ -34,13 +34,13 @@ port.onMessage.addListener((msg) => {
   if (selectedChanged) refreshDetail();
 });
 
-// ===== 顶部工具栏交互 =====
+// ===== Top toolbar interactions =====
 el("filter").addEventListener("input", (e) => {
   filterText = e.target.value.trim().toLowerCase();
   renderList();
 });
 
-// 类型过滤胶囊按钮（单选互斥，同 Network 面板）
+// Type filter pill buttons (single-select, like the Network panel)
 for (const btn of document.querySelectorAll(".filter-pills .pill")) {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".filter-pills .pill").forEach((b) => b.classList.remove("active"));
@@ -50,7 +50,7 @@ for (const btn of document.querySelectorAll(".filter-pills .pill")) {
   });
 }
 
-// 详情顶部 Tab 切换
+// Detail top tab switching
 for (const btn of document.querySelectorAll(".detail-tabs .tab-btn")) {
   btn.addEventListener("click", () => {
     activeTab = btn.dataset.tab;
@@ -61,7 +61,7 @@ for (const btn of document.querySelectorAll(".detail-tabs .tab-btn")) {
   });
 }
 
-// 清空与关闭
+// Clear and close
 el("clear").addEventListener("click", () => {
   entries.length = 0;
   hideDetail();
@@ -69,7 +69,7 @@ el("clear").addEventListener("click", () => {
 });
 el("detail-close").addEventListener("click", hideDetail);
 
-// 详情页右上角「复制载荷 / 复制响应」按钮
+// "Copy Payload / Copy Response" buttons in the top-right of the detail pane
 el("copy-req").addEventListener("click", () => {
   if (!selected || selected.req === undefined) return;
   copyText(formatJsonForCopy(selected.req), el("copy-req"));
@@ -80,7 +80,7 @@ el("copy-resp").addEventListener("click", () => {
   copyText(formatJsonForCopy(selected.resp), el("copy-resp"));
 });
 
-// ===== 键盘导航：Esc 关闭详情/菜单，上下方向键切换条目 =====
+// ===== Keyboard navigation: Esc closes detail/menu, ArrowUp/ArrowDown switch entries =====
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     el("ctx-menu").classList.add("hidden");
@@ -98,7 +98,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// ===== 拖拽调整左右分栏宽度 =====
+// ===== Drag to resize the left/right split =====
 (() => {
   const resizer = el("resizer");
   const listPane = el("list-pane");
@@ -125,7 +125,7 @@ document.addEventListener("keydown", (e) => {
   });
 })();
 
-// ===== 通用工具函数 =====
+// ===== Common utility functions =====
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -136,7 +136,7 @@ async function copyText(text, triggerBtn) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
-    // DevTools 面板若受焦点权限限制，回退至 textarea + execCommand
+    // If the DevTools panel is restricted by focus permissions, fall back to textarea + execCommand
     const ta = document.createElement("textarea");
     ta.value = text;
     ta.style.position = "fixed";
@@ -148,7 +148,7 @@ async function copyText(text, triggerBtn) {
   }
   if (triggerBtn) {
     const origin = triggerBtn.textContent;
-    triggerBtn.textContent = "✓ 已复制";
+    triggerBtn.textContent = "✓ Copied";
     triggerBtn.classList.add("copied");
     setTimeout(() => {
       triggerBtn.textContent = origin;
@@ -162,7 +162,7 @@ function formatJsonForCopy(data) {
   return typeof data === "string" ? data : JSON.stringify(data, null, 2);
 }
 
-// ===== 左侧请求列表渲染 =====
+// ===== Render the request list on the left =====
 function renderList() {
   const list = el("list");
   currentRows = entries
@@ -174,7 +174,7 @@ function renderList() {
     )
     .sort((a, b) => b.ts - a.ts);
 
-  el("count").textContent = currentRows.length + " 条";
+  el("count").textContent = currentRows.length + " entries";
   list.innerHTML = "";
   for (const e of currentRows) {
     const pending = e.status === "pending";
@@ -199,7 +199,7 @@ function renderList() {
   }
 }
 
-// ===== 列表右键上下文菜单 =====
+// ===== List right-click context menu =====
 const ctxMenu = el("ctx-menu");
 
 function openContextMenu(x, y, entry) {
@@ -232,7 +232,7 @@ ctxMenu.addEventListener("click", (ev) => {
 
 document.addEventListener("click", () => ctxMenu.classList.add("hidden"));
 
-// ===== 右侧详情抽屉控制 =====
+// ===== Right detail drawer controls =====
 function select(e) {
   selected = e;
   el("workspace").classList.add("detail-open");
@@ -258,7 +258,7 @@ function refreshDetail() {
   renderHeaders(selected);
   renderJsonTree(el("req-body"), selected.req);
   if (selected.status === "pending") {
-    el("resp-body").innerHTML = '<span class="empty">正在等待响应…</span>';
+    el("resp-body").innerHTML = '<span class="empty">Waiting for response…</span>';
   } else {
     renderJsonTree(el("resp-body"), selected.resp);
   }
@@ -266,7 +266,7 @@ function refreshDetail() {
   el("copy-resp").disabled = selected.status === "pending" || selected.resp === undefined;
 }
 
-// ===== Tab 1: 标头（General + Request Headers 可折叠分组）=====
+// ===== Tab 1: Headers (General + Request Headers collapsible groups) =====
 function renderHeaders(e) {
   const body = el("hdr-body");
   body.innerHTML = "";
@@ -282,14 +282,14 @@ function renderHeaders(e) {
   addHeaderSection(body, "General", generalRows);
 
   if (e.status === "pending") {
-    addHeaderSection(body, "Request Headers", [["状态", "响应返回后记录"]]);
+    addHeaderSection(body, "Request Headers", [["Status", "Recorded after the response returns"]]);
     return;
   }
   const rows = Object.entries(e.reqHeaders ?? {});
   if (e.traceId && !rows.some(([k]) => k.toLowerCase() === "x-trace-id")) {
     rows.push(["x-trace-id", e.traceId]);
   }
-  addHeaderSection(body, "Request Headers", rows.length > 0 ? rows : [["（未设置）", ""]]);
+  addHeaderSection(body, "Request Headers", rows.length > 0 ? rows : [["(not set)", ""]]);
 }
 
 function addHeaderSection(container, title, rows) {
@@ -318,11 +318,11 @@ function addHeaderSection(container, title, rows) {
   container.appendChild(sec);
 }
 
-// ===== Tab 2 & 3: JSON 折叠树 =====
+// ===== Tabs 2 & 3: collapsible JSON tree =====
 function renderJsonTree(container, value) {
   container.innerHTML = "";
   if (value === undefined) {
-    container.innerHTML = '<span class="empty">（无数据，如 notification 或发送前失败）</span>';
+    container.innerHTML = '<span class="empty">(No data, e.g. a notification or a failure before sending)</span>';
     return;
   }
   container.appendChild(buildJsonNode(container.id, "", value, true, ""));
@@ -331,7 +331,7 @@ function renderJsonTree(container, value) {
 function buildJsonNode(ns, key, value, isRoot, parentPath) {
   const selfPath = parentPath + "/" + key;
   const stored = ns + selfPath;
-  // 根节点默认展开（除非在 collapsedPaths 中）；子节点默认收起（除非在 expandedPaths 中）
+  // Root nodes expand by default (unless in collapsedPaths); child nodes collapse by default (unless in expandedPaths)
   const open = isRoot ? !collapsedPaths.has(stored) : expandedPaths.has(stored);
 
   const wrapper = document.createElement("div");

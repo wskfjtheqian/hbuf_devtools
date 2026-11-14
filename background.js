@@ -1,6 +1,6 @@
-// 消息中枢：把 content script 的日志按 tabId 转发给对应 DevTools 面板
+// Message hub: forwards content script logs to the matching DevTools panel by tabId
 const panels = new Map(); // tabId -> Set<Port>
-const cache = new Map(); // tabId -> entries[]（面板打开前的日志缓存，注册时回放）
+const cache = new Map(); // tabId -> entries[] (logs cached before the panel opens, replayed on registration)
 
 const MAX_CACHE = 200;
 
@@ -9,7 +9,7 @@ function pushCache(tabId, entries) {
   if (!cache.has(tabId)) cache.set(tabId, []);
   const list = cache.get(tabId);
   for (const e of entries) {
-    // 同 id 覆盖：同一条 RPC 的 pending 被 done 替换，不产生重复缓存
+    // Overwrite by id: the pending entry of an RPC is replaced by its done entry, avoiding duplicate cache items
     const idx = list.findIndex((x) => x.id === e.id);
     if (idx >= 0) list.splice(idx, 1);
     list.unshift(e);
@@ -23,7 +23,7 @@ chrome.runtime.onConnect.addListener((port) => {
     if (msg.type !== "REGISTER") return;
     if (!panels.has(msg.tabId)) panels.set(msg.tabId, new Set());
     panels.get(msg.tabId).add(port);
-    // 回放缓存：面板打开前产生的日志一次性补发，解决“先触发后开面板”时序问题
+    // Replay cache: batch-send logs produced before the panel opens, solving the "fired before panel opened" timing issue
     const snapshot = cache.get(msg.tabId) || [];
     if (snapshot.length > 0) {
       port.postMessage({ type: "HBUF_LOG", entries: snapshot });
