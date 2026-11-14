@@ -1,10 +1,17 @@
 const tabId = Number(new URLSearchParams(location.search).get("tabId"));
-const entries = []; // 请求日志：新 id 追加，已有 id 就地更新（pending → done）
+const entries = [];
 let filterText = "";
-const typeFilters = new Set(); // 传输类型过滤：空 = 全部（Network 同款交互）
-const expandedPaths = new Set(); // JSON 折叠树展开状态：条目更新/重建后保持（键为 容器id+字段路径）
+let activeType = "ALL"; // "ALL" | "http" | "websocket"
+let activeTab = "headers"; // "headers" | "payload" | "response"
+const collapsedPaths = new Set(); // 记录用户主动收起的节点（默认根节点展开，子节点收起）
+const expandedPaths = new Set();  // 记录用户主动展开的子节点
 let selected = null;
+let currentRows = []; // 当前过滤排序后的列表缓存，供键盘上下键导航
+let ctxEntry = null;  // 当前右键菜单选中的条目
 
+const el = (id) => document.getElementById(id);
+
+// ===== 与 background 建立长连接并注册当前 tabId =====
 const port = chrome.runtime.connect({ name: "HBUF_PANEL" });
 port.postMessage({ type: "REGISTER", tabId });
 port.onMessage.addListener((msg) => {
@@ -13,7 +20,7 @@ port.onMessage.addListener((msg) => {
   for (const e of msg.entries) {
     const idx = entries.findIndex((x) => x.id === e.id);
     if (idx >= 0) {
-      entries[idx] = e; // 同 id 更新：响应回来后替换 pending 条目
+      entries[idx] = e;
       if (selected && selected.id === e.id) {
         selected = e;
         selectedChanged = true;
@@ -24,63 +31,155 @@ port.onMessage.addListener((msg) => {
   }
   if (entries.length > 500) entries.length = 500;
   renderList();
-  if (selectedChanged) refreshDetail(); // 选中条目的响应回来后实时刷新详情区
+  if (selectedChanged) refreshDetail();
 });
 
-const el = (id) => document.getElementById(id);
-
+// ===== 顶部工具栏交互 =====
 el("filter").addEventListener("input", (e) => {
   filterText = e.target.value.trim().toLowerCase();
   renderList();
 });
-// 传输类型过滤按钮（Network 同款 toggle）：无选中 = 全部，有选中 = 只显示选中类型
-for (const btn of document.querySelectorAll(".toolbar .toggle")) {
+
+// 类型过滤胶囊按钮（单选互斥，同 Network 面板）
+for (const btn of document.querySelectorAll(".filter-pills .pill")) {
   btn.addEventListener("click", () => {
-    const type = btn.dataset.type;
-    if (typeFilters.has(type)) {
-      typeFilters.delete(type);
-      btn.classList.remove("active");
-    } else {
-      typeFilters.add(type);
-      btn.classList.add("active");
-    }
+    document.querySelectorAll(".filter-pills .pill").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    activeType = btn.dataset.type;
     renderList();
   });
 }
+
+// 详情顶部 Tab 切换
+for (const btn of document.querySelectorAll(".detail-tabs .tab-btn")) {
+  btn.addEventListener("click", () => {
+    activeTab = btn.dataset.tab;
+    document.querySelectorAll(".detail-tabs .tab-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll(".detail-content .tab-pane").forEach((p) => p.classList.remove("active"));
+    el("tab-" + activeTab).classList.add("active");
+  });
+}
+
+// 清空与关闭
 el("clear").addEventListener("click", () => {
   entries.length = 0;
   hideDetail();
   renderList();
 });
 el("detail-close").addEventListener("click", hideDetail);
-// 请求头区标题点击折叠/展开（Network Headers 分组同款交互）
-el("hdr-panel").querySelector(".hdr-toggle").addEventListener("click", () => {
-  const panel = el("hdr-panel");
-  const collapsed = panel.classList.toggle("collapsed");
-  el("hdr-arrow").textContent = collapsed ? "▸" : "▾";
+
+// 详情页右上角「复制载荷 / 复制响应」按钮
+el("copy-req").addEventListener("click", () => {
+  if (!selected || selected.req === undefined) return;
+  copyText(formatJsonForCopy(selected.req), el("copy-req"));
 });
 
+el("copy-resp").addEventListener("click", () => {
+  if (!selected || selected.status === "pending" || selected.resp === undefined) return;
+  copyText(formatJsonForCopy(selected.resp), el("copy-resp"));
+});
+
+// ===== 键盘导航：Esc 关闭详情/菜单，上下方向键切换条目 =====
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    el("ctx-menu").classList.add("hidden");
+    if (selected) hideDetail();
+    return;
+  }
+  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && currentRows.length > 0) {
+    if (document.activeElement === el("filter")) return;
+    e.preventDefault();
+    const curIdx = selected ? currentRows.findIndex((x) => x.id === selected.id) : -1;
+    const nextIdx = e.key === "ArrowDown"
+      ? Math.min(curIdx + 1, currentRows.length - 1)
+      : Math.max(curIdx - 1, 0);
+    select(currentRows[nextIdx]);
+  }
+});
+
+// ===== 拖拽调整左右分栏宽度 =====
+(() => {
+  const resizer = el("resizer");
+  const listPane = el("list-pane");
+  let dragging = false;
+
+  resizer.addEventListener("mousedown", (e) => {
+    dragging = true;
+    resizer.classList.add("dragging");
+    document.body.style.cursor = "col-resize";
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const total = el("workspace").clientWidth;
+    const width = Math.max(180, Math.min(total - 280, e.clientX));
+    listPane.style.flex = `0 0 ${width}px`;
+    listPane.style.maxWidth = "none";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove("dragging");
+    document.body.style.cursor = "";
+  });
+})();
+
+// ===== 通用工具函数 =====
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
 
+async function copyText(text, triggerBtn) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // DevTools 面板若受焦点权限限制，回退至 textarea + execCommand
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  if (triggerBtn) {
+    const origin = triggerBtn.textContent;
+    triggerBtn.textContent = "✓ 已复制";
+    triggerBtn.classList.add("copied");
+    setTimeout(() => {
+      triggerBtn.textContent = origin;
+      triggerBtn.classList.remove("copied");
+    }, 1200);
+  }
+}
+
+function formatJsonForCopy(data) {
+  if (data === undefined) return "";
+  return typeof data === "string" ? data : JSON.stringify(data, null, 2);
+}
+
+// ===== 左侧请求列表渲染 =====
 function renderList() {
   const list = el("list");
-  // 按开始时间倒序（最新在前），回放与实时批次的插入顺序不再影响展示顺序
-  const rows = entries.filter((e) =>
-    (!filterText ||
-      e.path.toLowerCase().includes(filterText) ||
-      (e.traceId ?? "").toLowerCase().includes(filterText)) &&
-    (typeFilters.size === 0 || typeFilters.has(e.transport))
-  ).sort((a, b) => b.ts - a.ts);
-  el("count").textContent = rows.length + " 条";
+  currentRows = entries
+    .filter((e) =>
+      (!filterText ||
+        e.path.toLowerCase().includes(filterText) ||
+        (e.traceId ?? "").toLowerCase().includes(filterText)) &&
+      (activeType === "ALL" || e.transport === activeType)
+    )
+    .sort((a, b) => b.ts - a.ts);
+
+  el("count").textContent = currentRows.length + " 条";
   list.innerHTML = "";
-  for (const e of rows) {
+  for (const e of currentRows) {
     const pending = e.status === "pending";
     const row = document.createElement("div");
-    row.className = "grid-row" + (e.error ? " err" : "") + (pending ? " pending" : "") + (selected === e ? " selected" : "");
+    row.className = "grid-row" + (e.error ? " err" : "") + (pending ? " pending" : "") + (selected?.id === e.id ? " selected" : "");
     row.innerHTML = `
       <span class="col-status">
         <span class="dot ${e.error ? "red" : (pending ? "gray" : "green")}"></span>
@@ -92,88 +191,134 @@ function renderList() {
       <span class="col-time">${e.duration != null ? e.duration + " ms" : "···"}</span>
       <span class="col-start">${new Date(e.ts).toLocaleTimeString()}</span>`;
     row.addEventListener("click", () => select(e));
+    row.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      openContextMenu(ev.clientX, ev.clientY, e);
+    });
     list.appendChild(row);
   }
 }
 
+// ===== 列表右键上下文菜单 =====
+const ctxMenu = el("ctx-menu");
+
+function openContextMenu(x, y, entry) {
+  ctxEntry = entry;
+  const reqItem = ctxMenu.querySelector('[data-action="copy-req"]');
+  const respItem = ctxMenu.querySelector('[data-action="copy-resp"]');
+  reqItem.classList.toggle("disabled", entry.req === undefined);
+  respItem.classList.toggle("disabled", entry.status === "pending" || entry.resp === undefined);
+
+  ctxMenu.classList.remove("hidden");
+  const maxX = window.innerWidth - ctxMenu.offsetWidth - 4;
+  const maxY = window.innerHeight - ctxMenu.offsetHeight - 4;
+  ctxMenu.style.left = Math.max(4, Math.min(x, maxX)) + "px";
+  ctxMenu.style.top = Math.max(4, Math.min(y, maxY)) + "px";
+}
+
+ctxMenu.addEventListener("click", (ev) => {
+  const item = ev.target.closest(".ctx-item");
+  if (!item || item.classList.contains("disabled") || !ctxEntry) return;
+  const action = item.dataset.action;
+  if (action === "copy-req") {
+    copyText(formatJsonForCopy(ctxEntry.req));
+  } else if (action === "copy-resp") {
+    copyText(formatJsonForCopy(ctxEntry.resp));
+  } else if (action === "copy-path") {
+    copyText(ctxEntry.path);
+  }
+  ctxMenu.classList.add("hidden");
+});
+
+document.addEventListener("click", () => ctxMenu.classList.add("hidden"));
+
+// ===== 右侧详情抽屉控制 =====
 function select(e) {
   selected = e;
-  renderList();
+  el("workspace").classList.add("detail-open");
   el("detail").classList.remove("hidden");
+  el("resizer").classList.remove("hidden");
+  renderList();
   refreshDetail();
+}
+
+function hideDetail() {
+  selected = null;
+  el("workspace").classList.remove("detail-open");
+  el("detail").classList.add("hidden");
+  el("resizer").classList.add("hidden");
+  el("list-pane").style.flex = "";
+  el("list-pane").style.maxWidth = "";
+  renderList();
 }
 
 function refreshDetail() {
   if (!selected) return;
   el("detail-path").textContent = selected.path;
-  el("detail-path").className = selected.error ? "err" : "";
-  const meta = [];
-  if (selected.traceId) meta.push("traceId: " + selected.traceId);
-  if (selected.status === "pending") {
-    meta.push("状态: 等待响应…");
-  } else {
-    meta.push("耗时: " + selected.duration + " ms");
-  }
-  meta.push("开始: " + new Date(selected.ts).toLocaleTimeString());
-  if (selected.error) meta.push("错误: " + selected.error);
-  el("detail-meta").textContent = meta.join("   |   ");
   renderHeaders(selected);
   renderJsonTree(el("req-body"), selected.req);
   if (selected.status === "pending") {
-    el("resp-body").innerHTML = '<span class="empty">等待响应…</span>';
+    el("resp-body").innerHTML = '<span class="empty">正在等待响应…</span>';
   } else {
     renderJsonTree(el("resp-body"), selected.resp);
   }
+  el("copy-req").disabled = selected.req === undefined;
+  el("copy-resp").disabled = selected.status === "pending" || selected.resp === undefined;
 }
 
-function hideDetail() {
-  selected = null;
-  el("detail").classList.add("hidden");
-  renderList();
-}
-
-// ===== 请求头区（Network Headers tab 同款：General + Request Headers 分组键值行）=====
+// ===== Tab 1: 标头（General + Request Headers 可折叠分组）=====
 function renderHeaders(e) {
   const body = el("hdr-body");
   body.innerHTML = "";
-  addHeaderGroup(body, "General", [
+  const statusText = e.error ? `ERR (${e.error})` : (e.status === "pending" ? "Pending" : `200 OK (${e.duration} ms)`);
+  const generalRows = [
     ["Request URL", e.path],
     ["Request Method", e.notification ? "NOTIFY" : "POST"],
-    ["Type", e.transport],
-  ]);
+    ["Status Code", statusText, Boolean(e.error)],
+    ["Transport", e.transport],
+    ["Start Time", new Date(e.ts).toLocaleTimeString()],
+  ];
+  if (e.traceId) generalRows.push(["Trace ID", e.traceId]);
+  addHeaderSection(body, "General", generalRows);
+
   if (e.status === "pending") {
-    addHeaderGroup(body, "Request Headers", [["（响应返回后记录）", ""]]);
+    addHeaderSection(body, "Request Headers", [["状态", "响应返回后记录"]]);
     return;
   }
   const rows = Object.entries(e.reqHeaders ?? {});
   if (e.traceId && !rows.some(([k]) => k.toLowerCase() === "x-trace-id")) {
-    rows.push(["x-trace-id", e.traceId]); // traceId 与 X-Trace-Id 请求头同源，补充展示
+    rows.push(["x-trace-id", e.traceId]);
   }
-  addHeaderGroup(body, "Request Headers", rows.length > 0 ? rows : [["（未设置）", ""]]);
+  addHeaderSection(body, "Request Headers", rows.length > 0 ? rows : [["（未设置）", ""]]);
 }
 
-function addHeaderGroup(body, name, rows) {
-  const group = document.createElement("div");
-  group.className = "hdr-group";
-  group.textContent = name;
-  body.appendChild(group);
-  for (const [k, v] of rows) {
+function addHeaderSection(container, title, rows) {
+  const sec = document.createElement("div");
+  sec.className = "hdr-section";
+
+  const head = document.createElement("div");
+  head.className = "hdr-sec-title";
+  head.innerHTML = `<span class="hdr-sec-arrow">▾</span><span>${escapeHtml(title)}</span>`;
+  head.addEventListener("click", () => {
+    const collapsed = sec.classList.toggle("collapsed");
+    head.querySelector(".hdr-sec-arrow").textContent = collapsed ? "▸" : "▾";
+  });
+
+  const body = document.createElement("div");
+  body.className = "hdr-sec-body";
+  for (const [k, v, isErr] of rows) {
     const row = document.createElement("div");
     row.className = "hdr-row";
-    const key = document.createElement("span");
-    key.className = "hdr-key";
-    key.textContent = k;
-    const val = document.createElement("span");
-    val.className = "hdr-val";
-    val.textContent = v;
-    val.title = v;
-    row.appendChild(key);
-    row.appendChild(val);
+    row.innerHTML = `<span class="hdr-key">${escapeHtml(k)}:</span><span class="hdr-val ${isErr ? "err" : ""}">${escapeHtml(v)}</span>`;
     body.appendChild(row);
   }
+
+  sec.appendChild(head);
+  sec.appendChild(body);
+  container.appendChild(sec);
 }
 
-// ===== JSON 折叠树 =====
+// ===== Tab 2 & 3: JSON 折叠树 =====
 function renderJsonTree(container, value) {
   container.innerHTML = "";
   if (value === undefined) {
@@ -183,87 +328,68 @@ function renderJsonTree(container, value) {
   container.appendChild(buildJsonNode(container.id, "", value, true, ""));
 }
 
-// ns 容器 id（req-body/resp-body）+ 字段路径组成展开状态键，重建后恢复用户展开/收起选择
-function buildJsonNode(ns, key, value, expanded, parentPath) {
+function buildJsonNode(ns, key, value, isRoot, parentPath) {
   const selfPath = parentPath + "/" + key;
   const stored = ns + selfPath;
-  const open = expandedPaths.has(stored) ? true : (expanded ?? false);
+  // 根节点默认展开（除非在 collapsedPaths 中）；子节点默认收起（除非在 expandedPaths 中）
+  const open = isRoot ? !collapsedPaths.has(stored) : expandedPaths.has(stored);
+
   const wrapper = document.createElement("div");
-  wrapper.className = "j-node";
+  wrapper.className = "j-node" + (isRoot ? " is-root" : "");
   const isArr = Array.isArray(value);
   const isObj = value !== null && typeof value === "object" && !isArr;
+  const keyPrefix = key !== "" ? `<span class="j-key">${escapeHtml(key)}</span><span class="j-punc">: </span>` : "";
 
   if (isArr || isObj) {
     const count = isArr ? value.length : Object.keys(value).length;
     if (count === 0) {
       const row = document.createElement("div");
       row.className = "j-line";
-      row.innerHTML = `<span class="j-key">${escapeHtml(key)}</span><span class="j-punc">: ${isArr ? "[]" : "{}"}</span>`;
+      row.innerHTML = `${keyPrefix}<span class="j-punc">${isArr ? "[]" : "{}"}</span>`;
       wrapper.appendChild(row);
       return wrapper;
     }
-    // 可折叠头部：▸/▾ + key + 元素数提示
+
     const header = document.createElement("div");
     header.className = "j-line j-toggle";
-    const arrow = document.createElement("span");
-    arrow.className = "j-arrow" + (open ? " open" : "");
-    arrow.textContent = open ? "▾" : "▸";
-    const label = document.createElement("span");
-    label.className = "j-key";
-    label.textContent = key + ": ";
-    const hint = document.createElement("span");
-    hint.className = "j-hint";
-    hint.textContent = isArr ? "Array(" + count + ")" : "{" + count + " keys}";
-    header.appendChild(arrow);
-    header.appendChild(label);
-    header.appendChild(hint);
+    header.innerHTML = `<span class="j-arrow">${open ? "▾" : "▸"}</span>${keyPrefix}<span class="j-hint">${isArr ? `Array(${count})` : `{${count} keys}`}</span>`;
     wrapper.appendChild(header);
 
     const children = document.createElement("div");
     children.className = "j-children" + (open ? "" : " hidden");
     if (isArr) {
-      value.forEach((item, i) => children.appendChild(buildJsonNode(ns, String(i), item, undefined, selfPath)));
+      value.forEach((item, i) => children.appendChild(buildJsonNode(ns, String(i), item, false, selfPath)));
     } else {
       for (const [k, v] of Object.entries(value)) {
-        children.appendChild(buildJsonNode(ns, k, v, undefined, selfPath));
+        children.appendChild(buildJsonNode(ns, k, v, false, selfPath));
       }
     }
-    children.appendChild(buildCloseLine(isArr ? "]" : "}"));
+    const closeLine = document.createElement("div");
+    closeLine.className = "j-line";
+    closeLine.innerHTML = `<span class="j-punc">${isArr ? "]" : "}"}</span>`;
+    children.appendChild(closeLine);
     wrapper.appendChild(children);
 
     header.addEventListener("click", () => {
       const isOpen = children.classList.toggle("hidden") === false;
-      if (isOpen) {
-        expandedPaths.add(stored);
+      if (isRoot) {
+        isOpen ? collapsedPaths.delete(stored) : collapsedPaths.add(stored);
       } else {
-        expandedPaths.delete(stored);
+        isOpen ? expandedPaths.add(stored) : expandedPaths.delete(stored);
       }
-      arrow.textContent = isOpen ? "▾" : "▸";
+      header.querySelector(".j-arrow").textContent = isOpen ? "▾" : "▸";
     });
     return wrapper;
   }
 
-  // 基本类型
   const row = document.createElement("div");
   row.className = "j-line";
   let cls = "num";
   let text = String(value);
-  if (value === null) {
-    cls = "nil";
-    text = "null";
-  } else if (value === true || value === false) {
-    cls = "bool";
-  } else if (typeof value === "string") {
-    cls = "str";
-    text = JSON.stringify(value);
-  }
-  row.innerHTML = `<span class="j-key">${escapeHtml(key)}</span><span class="j-punc">: </span><span class="j-val ${cls}">${escapeHtml(text)}</span>`;
+  if (value === null) { cls = "nil"; text = "null"; }
+  else if (typeof value === "boolean") { cls = "bool"; }
+  else if (typeof value === "string") { cls = "str"; text = JSON.stringify(value); }
+  row.innerHTML = `${keyPrefix}<span class="j-val ${cls}">${escapeHtml(text)}</span>`;
+  wrapper.appendChild(row);
   return wrapper;
-}
-
-function buildCloseLine(bracket) {
-  const row = document.createElement("div");
-  row.className = "j-line";
-  row.innerHTML = `<span class="j-punc">${bracket}</span>`;
-  return row;
 }

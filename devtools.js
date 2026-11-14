@@ -1,2 +1,2 @@
 const tabId = chrome.devtools.inspectedWindow.tabId;
-chrome.devtools.panels.create("HBuf RPC", "", "panel.html?tabId=" + tabId);
+chrome.devtools.panels.create("HRPC", "", "panel.html?tabId=" + tabId);
