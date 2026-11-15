@@ -185,7 +185,7 @@ function renderList() {
         <span class="dot ${e.error ? "red" : (pending ? "gray" : "green")}"></span>
         <span class="status-code">${e.error ? "ERR" : (pending ? "···" : "200")}</span>
       </span>
-      <span class="col-method">${e.notification ? "NOTIFY" : "POST"}</span>
+      <span class="col-method">${e.method}</span>
       <span class="col-name" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>
       <span class="col-type"><span class="badge ${e.transport}">${e.transport}</span></span>
       <span class="col-time">${e.duration != null ? e.duration + " ms" : "···"}</span>
@@ -273,7 +273,7 @@ function renderHeaders(e) {
   const statusText = e.error ? `ERR (${e.error})` : (e.status === "pending" ? "Pending" : `200 OK (${e.duration} ms)`);
   const generalRows = [
     ["Request URL", e.path],
-    ["Request Method", e.notification ? "NOTIFY" : "POST"],
+    ["Request Method", e.method],
     ["Status Code", statusText, Boolean(e.error)],
     ["Transport", e.transport],
     ["Start Time", new Date(e.ts).toLocaleTimeString()],
